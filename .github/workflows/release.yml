@@ -1,0 +1,57 @@
+# Entrega de @amg/core.
+#
+# El core es una libreria, no un servicio: "desplegarlo" es publicar una version
+# (un tag semver). Al empujar un tag `v*`:
+#   1. crea el GitHub Release de esa version;
+#   2. avisa a la suite (bentlyy/SaaSs) con un repository_dispatch `core-released`,
+#      que dispara su workflow `core-release.yml`: sube el tag de @amg/core en los
+#      package.json, refresca el lockfile, commitea y deja que el CI/CD de la suite
+#      despliegue a produccion.
+#
+# El paso 2 necesita el secreto DISPATCH_TOKEN (PAT con scope `repo` sobre SaaSs).
+# Sin el, el Release igual se crea y el dispatch se omite con un aviso: nada rojo.
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release + dispatch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Crear el GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "el release $GITHUB_REF_NAME ya existe"
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --notes "Release $GITHUB_REF_NAME de @amg/core." \
+              --verify-tag
+          fi
+
+      - name: Avisar a la suite (repository_dispatch)
+        env:
+          TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::Falta el secreto DISPATCH_TOKEN; no se avisa a la suite."
+            echo "Settings > Secrets and variables > Actions: DISPATCH_TOKEN (PAT con scope repo)."
+            exit 0
+          fi
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/bentlyy/SaaSs/dispatches \
+            -d "{\"event_type\":\"core-released\",\"client_payload\":{\"tag\":\"$GITHUB_REF_NAME\"}}"
+          echo "dispatch core-released ($GITHUB_REF_NAME) enviado a bentlyy/SaaSs"
